@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Love.css</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Playfair+Display:ital,wght@0,700;1,500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+
+  <!-- Three.js CDN dan yuklanadi (internet kerak) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <main class="stage" id="stage">
+
+    <!-- Fon nuri -->
+    <div class="glow"></div>
+
+    <!-- 3D gul shu canvas'ga chiziladi -->
+    <canvas id="gl"></canvas>
+
+    <!-- Yuklanish kartasi -->
+    <section class="card" id="card">
+      <div class="card-emoji">🌹</div>
+      <h1 class="card-title">Love.css</h1>
+      <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+      <p class="status" id="status">Ready to compile ...</p>
+      <button class="bloom-btn" id="bloomBtn" disabled>Tap to bloom</button>
+    </section>
+
+    <!-- Yakuniy matn -->
+    <p class="note">This for You</p>
+
+  </main>
+
+  <!-- ES module: Live Server (http://) orqali oching, faylni ikki marta bosib emas -->
+  <script type="module" src="script.js"></script>
+</body>
+</html>
