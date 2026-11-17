@@ -5,6 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
+import { startMusic, setMuted } from './music.js'
 
 /* =====================================================================
    SOZLAMALAR (shu yerdan sozlang)
@@ -1978,11 +1979,22 @@ function begin() {
   if (startMs !== null) return
   card.classList.add('hide')
   stage.classList.add('grow') // CSS: nur va matn animatsiyalari
+  startMusic()
+  muteBtn.classList.add('show')
   startMs = performance.now()
   lastMs = startMs
   requestAnimationFrame(loop)
 }
 btn.addEventListener('click', begin)
+
+// ovozni o'chirish / yoqish tugmasi
+const muteBtn = document.getElementById('muteBtn')
+let isMuted = false
+muteBtn.addEventListener('click', () => {
+  isMuted = !isMuted
+  setMuted(isMuted)
+  muteBtn.textContent = isMuted ? '🔇' : '🔊'
+})
 
 // Sozlash uchun: ?t=8 deb ochsangiz, animatsiya 8-soniyada qotib turadi
 const freeze = new URLSearchParams(window.location.search).get('t')
