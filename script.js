@@ -72,7 +72,7 @@ const status = document.getElementById('status')
 const btn = document.getElementById('bloomBtn')
 
 const STEPS = [
-  [500, 'Loading Love.css...', 15],
+  [500, 'Loading ...', 15],
   [1000, 'Growing digital petals ...', 35],
   [1500, 'Adding velvet textures ...', 55],
   [2000, 'Optimizing 3D rendering ...', 80],

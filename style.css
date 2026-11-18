@@ -51,14 +51,6 @@ body { background: #000; overflow: hidden; }
 
 .card-emoji { font-size: 40px; line-height: 1; }
 
-.card-title {
-  margin-top: 12px;
-  font-family: 'Playfair Display', serif;
-  font-weight: 700;
-  font-size: 26px;
-  color: #fff;
-}
-
 .bar {
   margin-top: 18px;
   height: 4px;
@@ -124,6 +116,15 @@ body { background: #000; overflow: hidden; }
   pointer-events: none;
 }
 .note-emoji { display: block; margin-top: 8px; font-size: 0.8em; font-style: normal; }
+
+/* Arabcha matn uchun */
+.note[lang="ar"] {
+  font-family: 'Amiri', 'Scheherazade New', 'Noto Naskh Arabic', serif;
+  font-style: normal;
+  font-size: clamp(26px, 4.2vmin, 42px);
+  line-height: 1.6;
+  letter-spacing: 0;
+}
 
 /* matn gul to'liq ochilganda (bosilgandan ~8.6 s keyin) paydo bo'ladi */
 .stage.grow .note { animation: noteIn 1.6s ease 17s both; }
