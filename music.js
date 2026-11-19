@@ -40,6 +40,12 @@ const AMBIENT = [
 
 let ctx = null, master = null, wet = null, timer = null, muted = false, fileAudio = null
 let vol = 0, duck = 1, gate = 1, volTimer = null, duckTimer = null, restartTimer = null
+let fileCtx = null, fileGain = null // qo'shiq Web Audio orqali: iOS'da ham fade/duck ishlaydi
+
+// iOS: sahifa fonga o'tganda audio "uxlab qoladi" — qaytganda uyg'otamiz
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && fileCtx && fileCtx.state !== 'running') fileCtx.resume().catch(() => {})
+})
 
 function seekToStart() {
   try {
@@ -47,6 +53,7 @@ function seekToStart() {
   } catch (e) {}
 }
 function playFile() {
+  if (fileCtx && fileCtx.state !== 'running') fileCtx.resume().catch(() => {})
   fileAudio.play().catch(() => {})
 }
 
@@ -177,6 +184,24 @@ export function startMusic() {
     fileAudio.volume = 0
     fileAudio.muted = muted
 
+    // iOS audio.volume ni o'zgartirishga ruxsat bermaydi, shuning uchun ovoz balandligini
+    // Web Audio "gain" orqali boshqaramiz. Bo'lmasa — oddiy audio.volume'ga qaytamiz.
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext
+      if (AC) {
+        fileCtx = new AC()
+        fileGain = fileCtx.createGain()
+        fileGain.gain.value = 0
+        fileCtx.createMediaElementSource(fileAudio).connect(fileGain)
+        fileGain.connect(fileCtx.destination)
+        fileAudio.volume = 1
+        fileAudio.muted = false // jimlikni ham gain boshqaradi
+      }
+    } catch (e) {
+      fileCtx = fileGain = null
+      fileAudio.volume = 0
+    }
+
     // metadata yuklangach 20-soniyaga o'tamiz
     if (fileAudio.readyState >= 1) seekToStart()
     else fileAudio.addEventListener('loadedmetadata', seekToStart, { once: true })
@@ -201,7 +226,9 @@ export function startMusic() {
       const target = muted ? 0 : MUSIC_VOLUME * duck * gate
       vol += (target - vol) * (target > vol ? 0.06 : 0.16)
       if (Math.abs(target - vol) < 0.002) vol = target
-      fileAudio.volume = Math.max(0, Math.min(1, vol))
+      const v = Math.max(0, Math.min(1, vol))
+      if (fileGain) fileGain.gain.setTargetAtTime(v, fileCtx.currentTime, 0.02)
+      else fileAudio.volume = v
     }, 40)
     return
   }
@@ -227,7 +254,7 @@ export function startMusic() {
 
 export function setMuted(m) {
   muted = m
-  if (fileAudio) fileAudio.muted = m // iOS'da volume o'zgarmaydi, muted esa ishlaydi
+  if (fileAudio && !fileGain) fileAudio.muted = m // Web Audio bo'lmasa (zaxira yo'l)
   if (ctx && master) {
     master.gain.cancelScheduledValues(ctx.currentTime)
     master.gain.linearRampToValueAtTime(m ? 0 : 0.9, ctx.currentTime + 0.4)
@@ -252,4 +279,15 @@ export function duckMusic(level = 0.35, ms = 1200) {
   duck = level
   clearTimeout(duckTimer)
   duckTimer = setTimeout(() => (duck = 1), ms)
+}
+
+// faqat ?debug uchun: musiqa holati
+export function musicState() {
+  return {
+    webAudio: !!fileGain,
+    ctx: fileCtx && fileCtx.state,
+    gain: fileGain ? +fileGain.gain.value.toFixed(3) : null,
+    time: fileAudio ? +fileAudio.currentTime.toFixed(1) : null,
+    paused: fileAudio ? fileAudio.paused : null,
+  }
 }

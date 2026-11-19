@@ -5,8 +5,8 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
-import { startMusic, setMuted, restartMusic, duckMusic } from './music.js?v=3'
-import * as sfx from './sfx.js?v=3'
+import { startMusic, setMuted, restartMusic, duckMusic, musicState } from './music.js?v=4'
+import * as sfx from './sfx.js?v=4'
 
 /* =====================================================================
    SOZLAMALAR (shu yerdan sozlang)
@@ -3066,8 +3066,8 @@ function begin() {
   if (startMs !== null) return
   card.classList.add('hide')
   stage.classList.add('grow') // CSS: nur va matn animatsiyalari
+  sfx.initSfx() // avval: iOS ovoz sessiyasini sozlaydi
   startMusic()
-  sfx.initSfx()
   enableMotion() // iOS: silkitishni sezish uchun ruxsat (tugma bosilganda so'raladi)
   muteBtn.classList.add('show')
   startMs = performance.now()
@@ -3112,6 +3112,7 @@ if (new URLSearchParams(location.search).has('debug')) {
     beetle,
     headG,
     camera,
+    music: musicState,
     ff: (sec) => startMs !== null && (startMs -= sec * 1000), // vaqtni oldinga surish
   }
 }

@@ -12,9 +12,16 @@ let ctx = null,
 
 // tugma bosilganda chaqiriladi (brauzer ovozga faqat foydalanuvchi bosgandan keyin ruxsat beradi)
 export function initSfx() {
+  // iOS 17+: telefon ovozsiz rejimda bo'lsa ham qo'ng'iz ovozi eshitilsin (qo'shiq kabi)
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = 'playback'
+  } catch (e) {}
   const AC = window.AudioContext || window.webkitAudioContext
   if (!AC || ctx) return
   ctx = new AC()
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && ctx.state !== 'running') ctx.resume().catch(() => {})
+  })
   out = ctx.createGain()
   out.gain.value = muted ? 0 : 1
   const comp = ctx.createDynamicsCompressor()
