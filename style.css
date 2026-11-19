@@ -1,12 +1,16 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
-html, body { height: 100%; }
+html, body { height: 100%; overscroll-behavior: none; }
 body { background: #000; overflow: hidden; }
 
 /* ============ SAHNA VA FON ============ */
 .stage {
   position: fixed;
   inset: 0;
+  touch-action: none; /* barmoq bilan surish sahifani emas, gulni aylantiradi */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
   display: grid;
   place-items: center;
   background: radial-gradient(ellipse 40% 45% at 50% 42%, #1a0008 0%, #000 70%);
@@ -153,3 +157,35 @@ body { background: #000; overflow: hidden; }
   transition: opacity 1s ease 2s;
 }
 .mute.show { opacity: 0.75; pointer-events: auto; }
+
+/* ============ AYLANTIRISH ============ */
+.stage.interactive { cursor: grab; }
+.stage.interactive.dragging { cursor: grabbing; }
+
+.hint {
+  position: absolute;
+  bottom: calc(clamp(24px, 6vh, 72px) + 64px); /* arabcha yozuv ustida */
+  left: 50%;
+  z-index: 3;
+  transform: translate(-50%, 6px);
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 120, 140, 0.22);
+  background: rgba(20, 4, 10, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: #f1d6da;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.8s ease, transform 0.8s ease;
+}
+.hint.show { opacity: 0.9; transform: translate(-50%, 0); }
+@media (max-width: 420px) {
+  .hint { font-size: 11px; padding: 7px 13px; }
+}
+.stage.closeup .note,
+.stage.closeup .hint { visibility: hidden; }

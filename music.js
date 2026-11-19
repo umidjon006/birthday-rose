@@ -39,6 +39,16 @@ const AMBIENT = [
 ]
 
 let ctx = null, master = null, wet = null, timer = null, muted = false, fileAudio = null
+let vol = 0, duck = 1, gate = 1, volTimer = null, duckTimer = null, restartTimer = null
+
+function seekToStart() {
+  try {
+    fileAudio.currentTime = MUSIC_START_AT
+  } catch (e) {}
+}
+function playFile() {
+  fileAudio.play().catch(() => {})
+}
 
 function makeReverb(c) {
   const len = c.sampleRate * 3.2
@@ -165,12 +175,8 @@ export function startMusic() {
     fileAudio.preload = 'auto'
     fileAudio.loop = false // o'zimiz qaytaramiz: har safar 20-soniyadan
     fileAudio.volume = 0
+    fileAudio.muted = muted
 
-    const seekToStart = () => {
-      try {
-        fileAudio.currentTime = MUSIC_START_AT
-      } catch (e) {}
-    }
     // metadata yuklangach 20-soniyaga o'tamiz
     if (fileAudio.readyState >= 1) seekToStart()
     else fileAudio.addEventListener('loadedmetadata', seekToStart, { once: true })
@@ -178,25 +184,25 @@ export function startMusic() {
     // qo'shiq tugasa yana 20-soniyadan boshlanadi — sahifa yopilmaguncha to'xtamaydi
     fileAudio.addEventListener('ended', () => {
       seekToStart()
-      fileAudio.play().catch(() => {})
+      playFile()
     })
 
-    const play = () => fileAudio.play().catch(() => {})
-    play()
+    playFile()
     // brauzer sekin yuklasa, tayyor bo'lgach yana urinib ko'ramiz
     fileAudio.addEventListener('canplay', () => {
       if (fileAudio.paused) {
         if (fileAudio.currentTime < MUSIC_START_AT) seekToStart()
-        play()
+        playFile()
       }
     })
 
-    let v = 0
-    const fade = setInterval(() => {
-      v = Math.min(MUSIC_VOLUME, v + 0.04)
-      fileAudio.volume = muted ? 0 : v
-      if (v >= MUSIC_VOLUME) clearInterval(fade)
-    }, 120)
+    // ovoz balandligi: doim maqsadga qarab silliq o'zgaradi (fade, duck, mute)
+    volTimer = setInterval(() => {
+      const target = muted ? 0 : MUSIC_VOLUME * duck * gate
+      vol += (target - vol) * (target > vol ? 0.06 : 0.16)
+      if (Math.abs(target - vol) < 0.002) vol = target
+      fileAudio.volume = Math.max(0, Math.min(1, vol))
+    }, 40)
     return
   }
   const AC = window.AudioContext || window.webkitAudioContext
@@ -221,9 +227,29 @@ export function startMusic() {
 
 export function setMuted(m) {
   muted = m
-  if (fileAudio) fileAudio.volume = m ? 0 : MUSIC_VOLUME
+  if (fileAudio) fileAudio.muted = m // iOS'da volume o'zgarmaydi, muted esa ishlaydi
   if (ctx && master) {
     master.gain.cancelScheduledValues(ctx.currentTime)
     master.gain.linearRampToValueAtTime(m ? 0 : 0.9, ctx.currentTime + 0.4)
   }
+}
+
+// qo'shiqni qaytadan (20-soniyadan) boshlash: avval jimgina so'nadi, keyin yana kiradi
+export function restartMusic() {
+  if (!fileAudio) return
+  gate = 0
+  clearTimeout(restartTimer)
+  restartTimer = setTimeout(() => {
+    seekToStart()
+    playFile()
+    vol = 0
+    gate = 1
+  }, 450)
+}
+
+// qo'ng'izcha gapirganda musiqani bir oz pasaytirish
+export function duckMusic(level = 0.35, ms = 1200) {
+  duck = level
+  clearTimeout(duckTimer)
+  duckTimer = setTimeout(() => (duck = 1), ms)
 }

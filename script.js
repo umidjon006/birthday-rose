@@ -5,7 +5,8 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
-import { startMusic, setMuted } from './music.js'
+import { startMusic, setMuted, restartMusic, duckMusic } from './music.js'
+import * as sfx from './sfx.js'
 
 /* =====================================================================
    SOZLAMALAR (shu yerdan sozlang)
@@ -698,9 +699,13 @@ function makeTube(curve, segs, radial, radiusFn, colorFn) {
 /* =====================================================================
    O'SIMLIK: poya va barglar (tikansiz)
    ===================================================================== */
+// Aylanuvchi tagkursi: foydalanuvchi sichqoncha / barmoq bilan gulni aylantiradi
+const turntable = new THREE.Group()
+turntable.position.y = 0.2 // gul boshiga yaqin nuqta atrofida egiladi
+scene.add(turntable)
 const plant = new THREE.Group() // pastki uchi (0,0,0), balandligi ~5.2
-plant.position.y = -4.7
-scene.add(plant)
+plant.position.y = -4.7 - turntable.position.y
+turntable.add(plant)
 
 const stemCurve = new THREE.CatmullRomCurve3(
   [
@@ -1366,11 +1371,13 @@ const ell = (r, sx, sy, sz, mat, x, y, z) => {
   return m
 }
 ell(1, 0.12, 0.085, 0.16, darkMat, 0, -0.005, 0.0) // tana
-ell(1, 0.085, 0.07, 0.078, darkMat, 0, 0.0, 0.185) // bosh
+const headMesh = ell(1, 0.085, 0.07, 0.078, darkMat, 0, 0.0, 0.185) // bosh
 ell(1, 0.105, 0.06, 0.06, shellMat, 0, 0.035, 0.115) // "yoqa"
+const eyes = []
 for (const s of [1, -1]) {
-  ell(0.03, 1, 1, 1, eyeMat, s * 0.05, 0.025, 0.232)
-  ell(0.009, 1, 1, 1, whiteBasic, s * 0.043, 0.042, 0.254)
+  const eye = ell(0.03, 1, 1, 1, eyeMat, s * 0.05, 0.025, 0.232)
+  const hl = ell(0.009, 1, 1, 1, whiteBasic, s * 0.043, 0.042, 0.254)
+  eyes.push({ eye, hl, s })
 }
 // mo'ylovlar
 const antennae = []
@@ -1390,12 +1397,14 @@ for (const s of [1, -1]) {
   antennae.push({ piv, s })
 }
 // oyoqchalar
+const legs = []
 for (const s of [1, -1]) {
   for (const z of [0.07, 0, -0.08]) {
     const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.006, 0.13, 5), darkMat)
     leg.position.set(s * 0.115, -0.07, z)
     leg.rotation.z = s * 0.7
     rig.add(leg)
+    legs.push(leg)
   }
 }
 // qattiq qanotlar (elytra): ochilib yopiladi, ustida nuqtalar
@@ -1462,6 +1471,278 @@ beetle.add(halo)
 const beetleLight = new THREE.PointLight(0xffb347, 0, 3.8, 2)
 beetleLight.position.set(0, 0.12, 0.1)
 beetle.add(beetleLight)
+
+/* ---------- bosh (alohida bo'g'in) va yuz ifodalari ---------- */
+// bosh bo'ynidan chayqaladi: aylanayotganda boshi aylanadi, kulganda/jahl qilganda qimirlaydi
+const NECK = new THREE.Vector3(0, 0.005, 0.14)
+const headG = new THREE.Group()
+headG.position.copy(NECK)
+rig.add(headG)
+headG.attach(headMesh)
+eyes.forEach(({ eye, hl }) => {
+  headG.attach(eye)
+  headG.attach(hl)
+})
+antennae.forEach(({ piv }) => headG.attach(piv))
+
+// bosh ellipsoidi va ko'zlar sirtining z koordinatasi (rig koordinatalarida)
+const headSurfZ = (x, y) =>
+  0.185 + 0.078 * Math.sqrt(Math.max(0, 1 - (x / 0.085) ** 2 - (y / 0.07) ** 2))
+function faceZ(x, y, overEyes) {
+  let z = headSurfZ(x, y)
+  if (overEyes)
+    for (const s of [1, -1]) {
+      const k = 0.03 ** 2 - (x - s * 0.05) ** 2 - (y - 0.025) ** 2
+      if (k > 0) z = Math.max(z, 0.232 + Math.sqrt(k))
+    }
+  return z
+}
+const toHead = (x, y, z) => new THREE.Vector3(x - NECK.x, y - NECK.y, z - NECK.z)
+// geometriyani o'z markaziga ko'chiramiz (shunda scale markazdan ishlaydi)
+function centered(geo, mat) {
+  geo.computeBoundingBox()
+  const c = geo.boundingBox.getCenter(new THREE.Vector3())
+  geo.translate(-c.x, -c.y, -c.z)
+  const m = new THREE.Mesh(geo, mat)
+  m.position.copy(c)
+  headG.add(m)
+  return m
+}
+function faceTube(pts2, r, mat, overEyes = false, lift = 0.003) {
+  const pts = pts2.map(([x, y]) => toHead(x, y, faceZ(x, y, overEyes) + lift))
+  return centered(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 28, r, 7, false), mat)
+}
+// yuz sirtiga yopishgan to'r (tekis uchburchaklar boshning ichiga botib ketmasin)
+function faceGrid(fn, nu, nv, mat, lift) {
+  const pos = [],
+    idx = []
+  for (let j = 0; j <= nv; j++)
+    for (let i = 0; i <= nu; i++) {
+      const [x, y] = fn(i / nu, j / nv)
+      const v = toHead(x, y, faceZ(x, y, false) + lift)
+      pos.push(v.x, v.y, v.z)
+    }
+  for (let j = 0; j < nv; j++)
+    for (let i = 0; i < nu; i++) {
+      const a = j * (nu + 1) + i,
+        b = a + 1,
+        c = a + nu + 1,
+        d = c + 1
+      idx.push(a, c, b, b, c, d)
+    }
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  g.setIndex(idx)
+  g.computeVertexNormals()
+  return centered(g, mat)
+}
+const inkMat = new THREE.MeshBasicMaterial({ color: 0x140405, side: THREE.DoubleSide })
+const mouthMat = new THREE.MeshBasicMaterial({ color: 0x4a0a16, side: THREE.DoubleSide })
+const tongueMat = new THREE.MeshBasicMaterial({ color: 0xff7193, side: THREE.DoubleSide })
+const arc = (n, fn) => Array.from({ length: n }, (_, i) => fn(-1 + (2 * i) / (n - 1)))
+
+// oddiy holat: kichik tabassum
+const mouthNeutral = faceTube(arc(7, (u) => [u * 0.02, -0.03 + 0.006 * u * u]), 0.0032, inkMat)
+// kulgi: ochiq og'iz + til
+const mouthOpen = (() => {
+  const W = 0.031
+  const m = faceGrid(
+    (u, v) => {
+      const x = (u * 2 - 1) * W,
+        q = 1 - (x / W) ** 2
+      const top = -0.022 - 0.004 * q
+      const bot = -0.022 - 0.032 * Math.pow(q, 0.8)
+      return [x, lerp(top, bot, v)]
+    },
+    24, 10, mouthMat, 0.003
+  )
+  const tongue = faceGrid(
+    (u, v) => {
+      const a = u * Math.PI * 2
+      return [0.015 * v * Math.cos(a), -0.042 + 0.007 * v * Math.sin(a)]
+    },
+    24, 4, tongueMat, 0.0045
+  )
+  headG.remove(tongue)
+  tongue.position.sub(m.position)
+  m.add(tongue)
+  return m
+})()
+// jahl: burchaklari pastga qaragan lab
+const mouthFrown = faceTube(arc(7, (u) => [u * 0.019, -0.027 - 0.009 * u * u + 0.0015 * Math.sin(u * 9)]), 0.0038, inkMat)
+// quvongan ko'zlar: ^ ^
+const happyEyes = [1, -1].map((s) =>
+  faceTube(arc(9, (u) => [s * 0.05 + u * 0.024, 0.017 + 0.017 * (1 - u * u)]), 0.0045, inkMat, false, 0.004)
+)
+// jahl qoshlari: ichki uchi pastda
+const brows = [1, -1].map((s) =>
+  faceTube([[s * 0.019, 0.049], [s * 0.045, 0.059], [s * 0.073, 0.072]], 0.0058, inkMat, true, 0.006)
+)
+// yonoqlar (qizarish)
+const blushTex = (() => {
+  const c = document.createElement('canvas')
+  c.width = c.height = 64
+  const g = c.getContext('2d')
+  const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32)
+  gr.addColorStop(0, 'rgba(255,255,255,1)')
+  gr.addColorStop(0.55, 'rgba(255,255,255,0.55)')
+  gr.addColorStop(1, 'rgba(255,255,255,0)')
+  g.fillStyle = gr
+  g.fillRect(0, 0, 64, 64)
+  return new THREE.CanvasTexture(c)
+})()
+const cheekMat = new THREE.MeshBasicMaterial({
+  map: blushTex, color: 0xff7aa2, transparent: true, opacity: 0, depthWrite: false,
+})
+const cheeks = [1, -1].map((s) => {
+  const x = s * 0.064, y = -0.017, z = headSurfZ(x, y)
+  const m = new THREE.Mesh(new THREE.CircleGeometry(0.019, 20), cheekMat)
+  m.position.copy(toHead(x, y, z + 0.002))
+  const n = new THREE.Vector3(x / 0.085 ** 2, y / 0.07 ** 2, (z - 0.185) / 0.078 ** 2).normalize()
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n)
+  headG.add(m)
+  return m
+})
+
+// kichik rasm-belgilar: yurakcha, jahl belgisi, bosh aylanish yulduzchasi
+function iconTex(draw) {
+  const c = document.createElement('canvas')
+  c.width = c.height = 128
+  draw(c.getContext('2d'))
+  const t = new THREE.CanvasTexture(c)
+  t.colorSpace = THREE.SRGBColorSpace
+  return t
+}
+const heartTex = iconTex((g) => {
+  g.shadowColor = 'rgba(255,90,140,0.9)'
+  g.shadowBlur = 18
+  g.fillStyle = '#ff4f86'
+  g.beginPath()
+  g.moveTo(64, 104)
+  g.bezierCurveTo(18, 72, 14, 30, 42, 26)
+  g.bezierCurveTo(56, 24, 62, 36, 64, 44)
+  g.bezierCurveTo(66, 36, 72, 24, 86, 26)
+  g.bezierCurveTo(114, 30, 110, 72, 64, 104)
+  g.fill()
+  g.fillStyle = 'rgba(255,255,255,0.7)'
+  g.beginPath()
+  g.ellipse(44, 44, 9, 6, -0.6, 0, Math.PI * 2)
+  g.fill()
+})
+const angerTex = iconTex((g) => {
+  // manga uslubidagi "jahl tomiri" belgisi
+  g.strokeStyle = '#ff2b3d'
+  g.lineWidth = 15
+  g.lineCap = 'round'
+  g.shadowColor = 'rgba(255,40,60,0.8)'
+  g.shadowBlur = 10
+  for (const [sx, sy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+    g.beginPath()
+    const cx = 64 + sx * 46, cy = 64 + sy * 46
+    const a0 = Math.atan2(-sy, -sx)
+    g.arc(cx, cy, 34, a0 - 0.62, a0 + 0.62)
+    g.stroke()
+  }
+})
+const starTex = iconTex((g) => {
+  g.shadowColor = 'rgba(255,220,120,0.9)'
+  g.shadowBlur = 14
+  g.fillStyle = '#ffe27a'
+  g.beginPath()
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 ? 22 : 52, a = -Math.PI / 2 + (i * Math.PI) / 5
+    g.lineTo(64 + r * Math.cos(a), 64 + r * Math.sin(a))
+  }
+  g.closePath()
+  g.fill()
+})
+const iconSprite = (map) =>
+  new THREE.Sprite(new THREE.SpriteMaterial({ map, transparent: true, depthWrite: false, opacity: 0 }))
+
+const angerMark = iconSprite(angerTex)
+angerMark.position.copy(toHead(0.078, 0.092, 0.225))
+angerMark.visible = false
+headG.add(angerMark)
+
+const dizzyStars = [0, 1, 2].map(() => {
+  const sp = iconSprite(starTex)
+  sp.scale.setScalar(0.06)
+  sp.visible = false
+  headG.add(sp)
+  return sp
+})
+
+const hearts = []
+for (let i = 0; i < 7; i++) {
+  const sp = iconSprite(heartTex)
+  sp.visible = false
+  scene.add(sp)
+  hearts.push({ sp, age: 9, life: 1, v: new THREE.Vector3() })
+}
+
+// xafa qoshlar: ichki uchi tepada
+const sadBrows = [1, -1].map((s) =>
+  faceTube([[s * 0.019, 0.071], [s * 0.045, 0.064], [s * 0.073, 0.05]], 0.0055, inkMat, true, 0.006)
+)
+// ko'z yoshlari
+const tearMat = new THREE.MeshBasicMaterial({
+  color: 0xaee8ff, transparent: true, opacity: 0, depthWrite: false, toneMapped: false,
+})
+const tears = [1, -1].map((s, i) => {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), tearMat.clone())
+  m.scale.set(0.0075, 0.011, 0.005)
+  m.visible = false
+  headG.add(m)
+  return { m, s, ph: i * 0.5 }
+})
+
+const shellEmissive0 = shellMat.emissive.clone()
+const angryEmissive = new THREE.Color(0xff2a12)
+setFace(0, 0, 0, 0, 0)
+
+// yuz ifodasini qo'llash: smile/angry 0..1, squint = ko'z yumilishi
+function setFace(smile, angry, blink, t, sad = 0) {
+  mouthNeutral.visible = smile < 0.35 && angry < 0.35 && sad < 0.35
+  mouthOpen.visible = smile > 0.02
+  mouthOpen.scale.set(0.55 + 0.45 * smile, Math.max(0.01, smile), 1)
+  const happy = smile > 0.55
+  happyEyes.forEach((m) => {
+    m.visible = happy
+    m.scale.setScalar(smooth(0.55, 0.9, smile) * 0.6 + 0.4)
+  })
+  const squint = Math.max(0.08, (1 - 0.32 * angry) * (1 - 0.12 * sad) * (1 - blink))
+  eyes.forEach(({ eye, hl }) => {
+    eye.visible = !happy
+    hl.visible = !happy && squint > 0.5 && angry < 0.25
+    hl.scale.setScalar(1 + 0.3 * sad) // yoshli, yaltiroq ko'zlar
+    eye.scale.set(1, squint, 1)
+  })
+  brows.forEach((m) => {
+    m.visible = angry > 0.02
+    m.scale.setScalar(Math.max(0.01, angry))
+  })
+  mouthFrown.visible = angry > 0.35 || sad > 0.35
+  mouthFrown.scale.set(1, 1 + 0.15 * sad * Math.sin(t * 11), 1) // xafa bo'lganda labi titraydi
+  sadBrows.forEach((m) => {
+    m.visible = sad > 0.02
+    m.scale.setScalar(Math.max(0.01, sad))
+  })
+  for (const tr of tears) {
+    tr.m.visible = sad > 0.25
+    if (!tr.m.visible) continue
+    const ph = (t * 0.7 + tr.ph) % 1
+    const x = tr.s * lerp(0.05, 0.062, ph),
+      y = lerp(-0.004, -0.056, ph * ph)
+    tr.m.position.copy(toHead(x, y, faceZ(x, y, false) + 0.006))
+    tr.m.material.opacity = sad * smooth(0, 0.15, ph) * (1 - smooth(0.75, 1, ph))
+  }
+  cheekMat.opacity = Math.max(smile * 0.7, angry * 0.85)
+  cheekMat.color.setHex(angry > smile ? 0xff3b3b : 0xff7aa2)
+  angerMark.visible = angry > 0.05
+  angerMark.material.opacity = angry
+  angerMark.scale.setScalar(0.058 * angry * (0.85 + 0.18 * Math.sin(t * 13)))
+  shellMat.emissive.copy(shellEmissive0).lerp(angryEmissive, angry * 0.75)
+}
 
 /* ---------- iz (trail): yaltiroq zarrachalar ---------- */
 const TRAIL_MAX = 4200
@@ -1668,7 +1949,7 @@ function buildPlan() {
 
 // qo'nish holatini (dunyo koordinatasi) bargning hozirgi holatidan hisoblash
 function updateRest() {
-  plant.updateMatrixWorld(true)
+  turntable.updateMatrixWorld(true)
   const g = landLeaf.group
   g.localToWorld(rest.pos.copy(plan.lp))
   g.getWorldQuaternion(_q)
@@ -1752,6 +2033,12 @@ function updateBeetle(t, dt) {
   trailGeo.setDrawRange(0, trailN)
   ;['position', 'aBirth', 'aKind', 'aSeed', 'aTarget'].forEach((n) => (trailGeo.attributes[n].needsUpdate = true))
 
+  // qo'ngandan keyin: erkin rejim (aylantirish, silkitish va h.k.)
+  if (tau >= doneTau) {
+    freeBeetle(t, dt)
+    return
+  }
+
   // o'rin
   const landU = clamp01((tau - plan.tEnd) / BT.land)
   if (tau >= doneTau) _p.copy(rest.pos)
@@ -1796,6 +2083,791 @@ function updateBeetle(t, dt) {
   const pulse = 0.88 + 0.12 * Math.sin(t * 2.8)
   halo.scale.setScalar((0.95 + 0.25 * fly) * pulse * grow)
   beetleLight.intensity = 1.7 * grow * (0.55 + 0.45 * fly) * pulse
+}
+
+/* =====================================================================
+   AYLANTIRISH: sichqoncha / barmoq bilan gulni har tomondan ko'rish.
+   Qattiq surib yuborilsa — inersiya bilan aylanadi.
+   ===================================================================== */
+const TILT_MIN = -0.32,
+  TILT_MAX = 0.55,
+  MAX_VEL = 26
+const spin = {
+  enabled: false,
+  yaw: 0,
+  vel: 0,
+  tilt: 0,
+  omega: 0, // hozirgi burchak tezligi (rad/s)
+  accum: 0, // to'xtovsiz aylangan burchak
+  jig: 0, // silkitilgandagi titroq
+  drag: false,
+  id: null,
+  px: 0,
+  py: 0,
+  pt: 0,
+  samples: [],
+  lastInput: -1e9,
+  rev: [],
+  dirX: 0,
+}
+const clampN = (x, a, b) => Math.min(b, Math.max(a, x))
+const rotK = () => 4.2 / Math.min(window.innerWidth || 800, 900)
+function recentDragVel(now) {
+  let sum = 0
+  for (const [ts, a] of spin.samples) if (now - ts < 100) sum += a
+  spin.samples = spin.samples.filter(([ts]) => now - ts < 160)
+  return sum / 0.1
+}
+stage.addEventListener('pointerdown', (e) => {
+  if (!spin.enabled || e.target.closest('.mute')) return
+  spin.drag = true
+  spin.id = e.pointerId
+  try {
+    stage.setPointerCapture(e.pointerId)
+  } catch (err) {}
+  spin.px = e.clientX
+  spin.py = e.clientY
+  spin.pt = performance.now()
+  spin.samples.length = 0
+  spin.vel *= 0.15 // aylanayotgan gulni ushlab olsa — sekinlashadi
+  spin.lastInput = performance.now()
+  stage.classList.add('dragging')
+  hideHint()
+})
+stage.addEventListener('pointermove', (e) => {
+  if (!spin.drag || e.pointerId !== spin.id) return
+  const now = performance.now()
+  const dx = e.clientX - spin.px,
+    dy = e.clientY - spin.py
+  const dtm = Math.max(1, now - spin.pt) / 1000
+  spin.px = e.clientX
+  spin.py = e.clientY
+  spin.pt = now
+  const k = rotK()
+  spin.yaw += dx * k
+  spin.tilt = clampN(spin.tilt + dy * k * 0.5, TILT_MIN, TILT_MAX)
+  spin.samples.push([now, dx * k])
+  spin.lastInput = now
+  // tez-tez u yoqqa-bu yoqqa siltash ham "silkitish" hisoblanadi (kompyuterda)
+  if (Math.abs(dx / dtm) > 650) {
+    const d = Math.sign(dx)
+    if (spin.dirX && d !== spin.dirX) spin.rev.push(now)
+    spin.dirX = d
+  }
+  spin.rev = spin.rev.filter((x) => now - x < 1000)
+  if (spin.rev.length >= 4) {
+    spin.rev.length = 0
+    requestShake()
+  }
+})
+function endDrag(e) {
+  if (!spin.drag || (e && e.pointerId !== undefined && e.pointerId !== spin.id)) return
+  spin.drag = false
+  stage.classList.remove('dragging')
+  spin.vel = clampN(recentDragVel(performance.now()), -MAX_VEL, MAX_VEL)
+  spin.lastInput = performance.now()
+}
+stage.addEventListener('pointerup', endDrag)
+stage.addEventListener('pointercancel', endDrag)
+stage.addEventListener('lostpointercapture', endDrag)
+
+function updateSpin(t, dt) {
+  const now = performance.now()
+  if (spin.drag) {
+    spin.omega = recentDragVel(now)
+  } else {
+    spin.yaw += spin.vel * dt
+    spin.vel *= Math.exp(-dt * 0.5) // havo qarshiligi
+    spin.vel -= Math.sign(spin.vel) * Math.min(Math.abs(spin.vel), 0.6 * dt)
+    spin.omega = spin.vel
+    // egilish asta-sekin o'z holiga qaytadi
+    if (now - spin.lastInput > 1400) spin.tilt += (0 - spin.tilt) * (1 - Math.exp(-dt * 1.1))
+  }
+  const w = Math.abs(spin.omega)
+  if (w > 0.8) spin.accum += w * dt
+  else if (w < 0.4) spin.accum = 0
+  spin.jig *= Math.exp(-dt * 1.7)
+  turntable.rotation.set(
+    spin.tilt + spin.jig * 0.06 * Math.sin(t * 23),
+    spin.yaw,
+    spin.jig * 0.1 * Math.sin(t * 19 + 1)
+  )
+}
+
+/* ---------- ko'rsatma ---------- */
+const hint = document.getElementById('hint')
+const isTouch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches
+let hintShown = false,
+  hintTimer = null
+function showHint() {
+  if (hintShown || !hint) return
+  hintShown = true
+  hint.textContent = isTouch
+    ? 'swipe to spin the rose  ·  shake your phone'
+    : 'drag to spin the rose  ·  wiggle it fast to shake'
+  hint.classList.add('show')
+  hintTimer = setTimeout(hideHint, 7000)
+}
+function hideHint() {
+  if (!hint) return
+  clearTimeout(hintTimer)
+  hint.classList.remove('show')
+}
+function enableInteraction() {
+  spin.enabled = true
+  stage.classList.add('interactive')
+  setTimeout(showHint, 1200)
+}
+
+/* ---------- telefonni silkitish (DeviceMotion) ---------- */
+let motionOn = false
+function enableMotion() {
+  const DME = window.DeviceMotionEvent
+  if (!DME || motionOn) return
+  const add = () => {
+    if (motionOn) return
+    motionOn = true
+    window.addEventListener('devicemotion', onMotion)
+  }
+  // iOS ruxsat so'raydi — bu foydalanuvchi bosgan paytda chaqirilishi shart
+  if (typeof DME.requestPermission === 'function')
+    DME.requestPermission()
+      .then((s) => s === 'granted' && add())
+      .catch(() => {})
+  else add()
+}
+let gPrev = null,
+  lastPeak = 0,
+  peaks = []
+function onMotion(e) {
+  let m = null,
+    th = 14
+  const a = e.acceleration
+  if (a && a.x != null) m = Math.hypot(a.x, a.y, a.z)
+  else {
+    const g = e.accelerationIncludingGravity
+    if (!g || g.x == null) return
+    if (gPrev) m = Math.hypot(g.x - gPrev.x, g.y - gPrev.y, g.z - gPrev.z)
+    gPrev = { x: g.x, y: g.y, z: g.z }
+    th = 10
+    if (m == null) return
+  }
+  const now = performance.now()
+  if (m > th && now - lastPeak > 110) {
+    lastPeak = now
+    peaks.push(now)
+  }
+  peaks = peaks.filter((x) => now - x < 1000)
+  if (peaks.length >= 3) {
+    peaks = []
+    requestShake()
+  }
+}
+
+/* =====================================================================
+   AYLANISH YULDUZCHALARI: gul qancha tez aylansa, ichidan shuncha ko'p
+   turli o'lchamdagi yulduzchalar otilib chiqadi
+   ===================================================================== */
+const SP_N = 900
+const spPos = new Float32Array(SP_N * 3),
+  spVel = new Float32Array(SP_N * 3),
+  spAge = new Float32Array(SP_N).fill(99),
+  spLife = new Float32Array(SP_N).fill(1),
+  spSize0 = new Float32Array(SP_N),
+  spSeed = new Float32Array(SP_N),
+  spSize = new Float32Array(SP_N),
+  spAlpha = new Float32Array(SP_N),
+  spCol = new Float32Array(SP_N * 3),
+  spStar = new Float32Array(SP_N)
+const spGeo = new THREE.BufferGeometry()
+spGeo.setAttribute('position', mkAttr(spPos, 3))
+spGeo.setAttribute('aSize', mkAttr(spSize, 1))
+spGeo.setAttribute('aAlpha', mkAttr(spAlpha, 1))
+spGeo.setAttribute('aColor', mkAttr(spCol, 3))
+spGeo.setAttribute('aStar', mkAttr(spStar, 1))
+const spMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  uniforms: { uScale: { value: 600 } },
+  vertexShader: `
+    attribute float aSize; attribute float aAlpha; attribute vec3 aColor; attribute float aStar;
+    uniform float uScale;
+    varying float vA; varying vec3 vC; varying float vStar;
+    void main() {
+      vA = aAlpha; vC = aColor; vStar = aStar;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = aSize * uScale / -mv.z;
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    varying float vA; varying vec3 vC; varying float vStar;
+    void main() {
+      vec2 c = gl_PointCoord - 0.5;
+      float d = length(c);
+      float core = pow(smoothstep(0.5, 0.0, d), 2.4);
+      float star = vStar * (max(0.0, 1.0 - abs(c.x) * 11.0) * max(0.0, 1.0 - abs(c.y) * 2.1)
+                          + max(0.0, 1.0 - abs(c.y) * 11.0) * max(0.0, 1.0 - abs(c.x) * 2.1));
+      float a = (core + star) * vA;
+      gl_FragColor = vec4(vC * a, a);
+    }`,
+})
+const spPts = new THREE.Points(spGeo, spMat)
+spPts.frustumCulled = false
+scene.add(spPts)
+let spNext = 0,
+  spAcc = 0
+const _heart = new THREE.Vector3()
+const SP_COLS = [
+  [1.0, 0.82, 0.45], // oltin
+  [1.0, 0.56, 0.72], // pushti
+  [1.0, 0.95, 0.9], // oq
+  [1.0, 0.7, 0.5], // shaftoli
+]
+function emitSpark(omega, burst = 0) {
+  const i = spNext
+  spNext = (spNext + 1) % SP_N
+  const a = Math.random() * Math.PI * 2
+  const r0 = 0.05 + Math.random() * 0.33
+  const ca = Math.cos(a),
+    sa = Math.sin(a)
+  spPos[i * 3] = _heart.x + ca * r0
+  spPos[i * 3 + 1] = _heart.y + Math.random() * 0.25
+  spPos[i * 3 + 2] = _heart.z + sa * r0
+  const sk = Math.min(Math.abs(omega) / 8, 2) + burst
+  const out = (0.5 + Math.random() * 1.2) * (0.6 + sk)
+  const tang = (0.3 + Math.random()) * 1.4 * omega * 0.25
+  spVel[i * 3] = ca * out + sa * tang
+  spVel[i * 3 + 1] = 0.6 + Math.random() * 1.7 + burst * 0.8
+  spVel[i * 3 + 2] = sa * out - ca * tang
+  spAge[i] = 0
+  spLife[i] = 0.9 + Math.random() * 1.4
+  spSize0[i] = 0.03 + Math.pow(Math.random(), 2.2) * 0.21
+  spSeed[i] = Math.random() * 50
+  spStar[i] = spSize0[i] > 0.1 || Math.random() < 0.15 ? 1 : 0
+  const c = SP_COLS[(Math.random() * SP_COLS.length) | 0]
+  spCol.set(c, i * 3)
+}
+function burstSparks(n) {
+  rose.localToWorld(_heart.set(0, 0.55, 0))
+  for (let k = 0; k < n; k++) emitSpark((Math.random() - 0.5) * 10, 0.8)
+}
+function updateSpinSparks(t, dt) {
+  spMat.uniforms.uScale.value = trailMat.uniforms.uScale.value
+  const w = Math.abs(spin.omega)
+  const rate = clampN((w - 1.0) * 42, 0, 620)
+  if (rate > 0 && head.visible) {
+    rose.localToWorld(_heart.set(0, 0.55, 0))
+    spAcc += rate * dt
+    while (spAcc >= 1) {
+      spAcc -= 1
+      emitSpark(spin.omega)
+    }
+  } else spAcc = 0
+  const drag = Math.exp(-dt * 1.1)
+  for (let i = 0; i < SP_N; i++) {
+    if (spAge[i] > spLife[i]) {
+      spAlpha[i] = 0
+      continue
+    }
+    spAge[i] += dt
+    spVel[i * 3 + 1] -= 0.9 * dt
+    spVel[i * 3] *= drag
+    spVel[i * 3 + 1] *= drag
+    spVel[i * 3 + 2] *= drag
+    spPos[i * 3] += spVel[i * 3] * dt
+    spPos[i * 3 + 1] += spVel[i * 3 + 1] * dt
+    spPos[i * 3 + 2] += spVel[i * 3 + 2] * dt
+    const age = spAge[i],
+      life = spLife[i]
+    const tw = 0.62 + 0.38 * Math.sin(age * 22 + spSeed[i])
+    spAlpha[i] = smooth(0, 0.07, age) * (1 - smooth(life * 0.5, life, age)) * tw
+    spSize[i] = spSize0[i] * (1 - 0.4 * (age / life))
+  }
+  ;['position', 'aSize', 'aAlpha', 'aColor', 'aStar'].forEach(
+    (n) => (spGeo.attributes[n].needsUpdate = true)
+  )
+}
+
+/* =====================================================================
+   SILKITISH: gulbarglar to'kiladi -> gul qaytadan o'sadi, musiqa qaytadan
+   ===================================================================== */
+const REGROW_DELAY = 7.2 // barglar to'kilib bo'lgach (~2 s) yana ~5 s bo'sh turadi
+const REGROW_SPEED = 0.5 // qayta o'sish 2 baravar sekinroq
+const SHED = { active: false, t0: 0, regrowAt: 0, regrown: false, regrowStart: null, count: 0 }
+const shedClones = []
+let pendingShake = false
+function requestShake() {
+  if (spin.enabled && !SHED.active) pendingShake = true
+}
+function vibrate(p) {
+  try {
+    if (navigator.vibrate) navigator.vibrate(p)
+  } catch (e) {}
+}
+function startShed(t) {
+  SHED.active = true
+  SHED.t0 = t
+  SHED.regrowAt = t + REGROW_DELAY
+  SHED.regrown = false
+  SHED.count++
+  vibrate([80, 40, 120, 40, 200])
+  spin.jig = 1
+  hideHint()
+  // tashqi gulbarglar birinchi uchadi, ichkilari keyin
+  petals.forEach((p) => {
+    p.shedAt = t + (1 - p.s) * 1.7 + Math.random() * 0.35
+    p.shed = false
+  })
+  burstSparks(70)
+  // qo'ng'izcha ekranga uchib keladi: 1-marta kuladi, 2-marta jahli chiqadi (navbatma-navbat)
+  startClose(t, SHED.count % 2 === 1 ? 'smile' : 'angry')
+}
+// gul boshining "soati": qayta o'sganda kurtak bosqichidan boshlanadi
+function headClock(t) {
+  return SHED.regrowStart != null && t >= SHED.regrowStart
+    ? T.budStart - 0.25 + (t - SHED.regrowStart) * REGROW_SPEED
+    : t
+}
+function shedShrink(t) {
+  return SHED.active && !SHED.regrown ? 1 - smooth(SHED.regrowAt - 0.7, SHED.regrowAt, t) : 1
+}
+const _dp = new THREE.Vector3(),
+  _ax = new THREE.Vector3()
+function detachPetal(p) {
+  p.shed = true
+  p.mesh.updateWorldMatrix(true, false)
+  const m = new THREE.Mesh(p.geo.clone(), petalMat)
+  m.castShadow = true
+  p.mesh.matrixWorld.decompose(m.position, m.quaternion, m.scale)
+  scene.add(m)
+  p.mesh.visible = false
+  rose.localToWorld(_heart.set(0, 0.55, 0))
+  _dp.subVectors(m.position, _heart)
+  _dp.y = 0
+  if (_dp.lengthSq() < 1e-6) _dp.set(Math.random() - 0.5, 0, Math.random() - 0.5)
+  _dp.normalize()
+  const v = _dp.clone().multiplyScalar(0.7 + Math.random() * 1.4)
+  v.y += 0.4 + Math.random() * 1.1
+  v.x += (Math.random() - 0.5) * 0.5 + _dp.z * spin.omega * 0.15
+  v.z += (Math.random() - 0.5) * 0.5 - _dp.x * spin.omega * 0.15
+  shedClones.push({
+    m,
+    v,
+    age: 0,
+    life: 4.2 + Math.random() * 1.3,
+    s0: m.scale.clone(),
+    ph: Math.random() * 6.28,
+    ax: _ax.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().clone(),
+    rs: (Math.random() - 0.5) * 7,
+  })
+}
+function updateShed(t, dt) {
+  if (SHED.active) {
+    if (!SHED.regrown) petals.forEach((p) => !p.shed && t >= p.shedAt && detachPetal(p))
+    if (!SHED.regrown && t >= SHED.regrowAt) {
+      SHED.regrown = true
+      SHED.regrowStart = t
+      petals.forEach((p) => {
+        p.mesh.visible = true
+        p.shed = false
+      })
+      restartMusic()
+    }
+    if (SHED.regrown && t > SHED.regrowStart + 8.8) SHED.active = false
+  }
+  for (let i = shedClones.length - 1; i >= 0; i--) {
+    const f = shedClones[i]
+    f.age += dt
+    f.v.y -= 1.9 * dt
+    f.v.multiplyScalar(Math.exp(-dt * 1.3))
+    f.m.position.addScaledVector(f.v, dt)
+    f.m.position.x += Math.sin(f.age * 2.6 + f.ph) * 0.5 * dt
+    f.m.position.z += Math.cos(f.age * 2.1 + f.ph) * 0.3 * dt
+    f.m.rotateOnAxis(f.ax, f.rs * dt)
+    const k = 1 - smooth(f.life - 0.9, f.life, f.age)
+    f.m.scale.copy(f.s0).multiplyScalar(Math.max(k, 1e-4))
+    if (f.age >= f.life) {
+      scene.remove(f.m)
+      f.m.geometry.dispose()
+      shedClones.splice(i, 1)
+    }
+  }
+}
+
+/* =====================================================================
+   QO'NG'IZCHA (erkin rejim, qo'ngandan keyin):
+   - gul aylansa boshi chayqaladi (boshi aylanadi), tepasida yulduzchalar
+   - gul to'liq aylansa — uchib chetda turadi, gul to'xtasa yana qo'nadi
+   - silkitilsa — ekranga yaqin uchib keladi: kuladi yoki jahli chiqadi
+   ===================================================================== */
+const BF = {
+  started: false,
+  mode: 'rest',
+  fly: 0,
+  dizzy: 0,
+  calm: 0,
+  side: 1,
+  prev: new THREE.Vector3(),
+  c: null,
+  smile: 0,
+  angry: 0,
+  blink: 0,
+  nextBlink: 2,
+  closeness: 0,
+  sad: null,
+  sadF: 0,
+  sc: 1,
+}
+const _cr = new THREE.Vector3(),
+  _cu = new THREE.Vector3(),
+  _cf = new THREE.Vector3(),
+  _tgt = new THREE.Vector3(),
+  _fa = new THREE.Vector3(),
+  _fb = new THREE.Vector3(),
+  _st = new THREE.Vector3(),
+  _hc = new THREE.Vector3(),
+  _end = new THREE.Vector3(),
+  _ctl = new THREE.Vector3(),
+  _qc = new THREE.Quaternion(),
+  _qf = new THREE.Quaternion(),
+  _wup = new THREE.Vector3(0, 1, 0)
+
+function camBasis() {
+  camera.updateMatrixWorld()
+  _cr.setFromMatrixColumn(camera.matrixWorld, 0)
+  _cu.setFromMatrixColumn(camera.matrixWorld, 1)
+  _cf.setFromMatrixColumn(camera.matrixWorld, 2).negate()
+}
+function hoverPoint(t, out) {
+  rose.localToWorld(_heart.set(0, 0.55, 0))
+  const dist = camera.position.distanceTo(_heart)
+  const visW = 2 * dist * Math.tan(deg(camera.fov) / 2) * camera.aspect
+  const off = Math.min(2.1, visW * 0.3)
+  out.copy(_heart).addScaledVector(_cr, BF.side * off).addScaledVector(_cu, 0.55).addScaledVector(_cf, -0.6)
+  out.x += 0.12 * Math.sin(t * 1.7)
+  out.y += 0.16 * Math.sin(t * 2.3)
+  out.z += 0.1 * Math.cos(t * 1.3)
+  return out
+}
+function follow(target, dt, k, maxSpeed = 4) {
+  _st.subVectors(target, beetle.position).multiplyScalar(1 - Math.exp(-dt * k))
+  const mx = maxSpeed * dt
+  if (_st.length() > mx) _st.setLength(mx)
+  beetle.position.add(_st)
+}
+// uchayotganda: harakat yo'nalishiga, sekin bo'lsa — bizga qaraydi
+function faceFlight(dt, q) {
+  _fa.subVectors(beetle.position, BF.prev)
+  const sp = _fa.length() / Math.max(dt, 1e-3)
+  _fb.subVectors(camera.position, beetle.position).normalize()
+  if (sp > 0.5) _fa.normalize().lerp(_fb, 0.35).normalize()
+  else {
+    rose.localToWorld(_heart.set(0, 0.55, 0))
+    _fa.subVectors(_heart, beetle.position).normalize().lerp(_fb, 0.7).normalize()
+  }
+  frameQuat(_fa, _wup, q)
+}
+function takeOff() {
+  BF.mode = 'hover'
+  BF.calm = 0
+  rose.localToWorld(_heart.set(0, 0.55, 0))
+  BF.side = Math.sign(_fa.subVectors(beetle.position, _heart).dot(_cr)) || 1
+}
+function startClose(t, kind) {
+  BF.c = { t0: t + 0.15, kind, from: beetle.position.clone(), fromS: beetle.scale.x, voiced: false }
+  BF.mode = 'close'
+}
+const bez = (a, b, c, u, out) =>
+  out.copy(a).multiplyScalar((1 - u) * (1 - u)).addScaledVector(b, 2 * u * (1 - u)).addScaledVector(c, u * u)
+
+// ekranga yaqin uchib kelish: yuzi ekranni egallaydi
+function closeUpdate(t, dt, q) {
+  const C = BF.c
+  const c = Math.max(0, t - C.t0)
+  const D = 1.55
+  const visH = 2 * D * Math.tan(deg(camera.fov) / 2)
+  const visW = visH * camera.aspect
+  const S = Math.min((0.72 * visH) / 0.15, (0.9 * visW) / 0.2, 4.5)
+  frameQuat(_fa.copy(_cf).negate(), _cu, _qc)
+  _hc.set(0, 0.005, 0.185).applyQuaternion(_qc).multiplyScalar(S)
+  _end.copy(camera.position).addScaledVector(_cf, D).sub(_hc).addScaledVector(_cu, 0.003 * S * Math.sin(t * 2.6))
+  const A = 1.0,
+    HOLD = 3.1
+  let s
+  if (c < A) {
+    const u = easeInOut(c / A)
+    _ctl.copy(C.from).lerp(_end, 0.5).addScaledVector(_cu, 1.0)
+    bez(C.from, _ctl, _end, u, beetle.position)
+    s = lerp(C.fromS, S, Math.pow(u, 2.4))
+    q.copy(_qc)
+  } else if (c < HOLD) {
+    beetle.position.copy(_end)
+    s = S
+    q.copy(_qc)
+  } else {
+    // gulbarglar to'kildi — endi xafa bo'ladi
+    beetle.position.copy(_end)
+    s = S
+    q.copy(_qc)
+    BF.mode = 'sad'
+    BF.sad = { t0: t, from: _end.clone(), fromS: S, sighed: false, sniffed: 0, hoped: false, joyed: false }
+    BF.c = null
+  }
+  BF.closeness = clamp01((s - 1) / Math.max(0.01, S - 1))
+  // yuz ifodasi
+  const on = c > 1.05 && c < HOLD - 0.15 ? 1 : 0
+  const tS = C.kind === 'smile' ? on : 0,
+    tA = C.kind === 'angry' ? on : 0
+  BF.smile += (tS - BF.smile) * (1 - Math.exp(-dt * 9))
+  BF.angry += (tA - BF.angry) * (1 - Math.exp(-dt * 9))
+  if (!C.voiced && c > 1.15) {
+    C.voiced = true
+    duckMusic(0.3, 1400)
+    if (C.kind === 'smile') {
+      sfx.giggle()
+      spawnHearts(5)
+    } else {
+      sfx.grumble()
+      vibrate([40, 30, 40, 30, 70])
+    }
+  }
+  return s
+}
+
+const _hw = new THREE.Vector3()
+function spawnHearts(n) {
+  headG.localToWorld(_hw.set(0, 0.06, 0.12))
+  let k = 0
+  for (const h of hearts) {
+    if (k >= n) break
+    if (h.age < h.life) continue
+    k++
+    h.age = -k * 0.12
+    h.life = 1.7 + Math.random() * 0.5
+    h.sp.position.copy(_hw).addScaledVector(_cr, (Math.random() - 0.5) * 0.5)
+    h.v.copy(_cu).multiplyScalar(0.35 + Math.random() * 0.25).addScaledVector(_cr, (Math.random() - 0.5) * 0.4)
+    h.sp.visible = false
+  }
+}
+function updateHearts(dt) {
+  for (const h of hearts) {
+    if (h.age >= h.life) {
+      h.sp.visible = false
+      continue
+    }
+    h.age += dt
+    if (h.age < 0) continue
+    h.sp.visible = true
+    h.sp.position.addScaledVector(h.v, dt)
+    const k = h.age / h.life
+    h.sp.material.opacity = smooth(0, 0.12, h.age) * (1 - smooth(0.6, 1, k))
+    h.sp.scale.setScalar(0.07 + 0.05 * Math.sin(Math.min(1, k * 3) * Math.PI * 0.5) + 0.01 * Math.sin(h.age * 9))
+  }
+}
+
+/* ---------- xafa qo'ng'izcha: gul yonida, gul qayta o'sguncha ---------- */
+function sadSpot(t, out) {
+  rose.localToWorld(_heart.set(0, 0.55, 0))
+  const dR = camera.position.distanceTo(_heart)
+  const tanH = Math.tan(deg(camera.fov) / 2)
+  const d = Math.min(5, dR * 0.35)
+  const visH = 2 * d * tanH,
+    visW = visH * camera.aspect
+  const S2 = Math.min((0.24 * visH) / 0.15, (0.36 * visW) / 0.2)
+  const visHR = 2 * dR * tanH,
+    visWR = visHR * camera.aspect
+  _tgt.copy(_heart)
+  if (camera.aspect < 0.8) {
+    // tik ekran: gul boshining ostida, sal chetroqda
+    const off = 0.8 / visHR + (0.15 * S2) / visH / 2 + 0.03
+    _tgt.addScaledVector(_cu, -off * visHR).addScaledVector(_cr, BF.side * 0.1 * visWR)
+  } else {
+    // yotiq ekran: gul boshining yonida
+    const fw = (0.2 * S2) / visW
+    const off = Math.min(0.8 / visWR + fw / 2 + 0.03, 0.5 - fw / 2 - 0.02)
+    _tgt.addScaledVector(_cr, BF.side * off * visWR).addScaledVector(_cu, -0.9)
+  }
+  _fa.subVectors(_tgt, camera.position).normalize()
+  out.copy(camera.position).addScaledVector(_fa, d).addScaledVector(_cu, 0.01 * S2 * Math.sin(t * 1.6))
+  return S2
+}
+function sadUpdate(t, dt, q) {
+  const Sd = BF.sad
+  const c = t - Sd.t0
+  const S2 = sadSpot(t, _end)
+  let s
+  if (c < 1.1) {
+    const u = easeInOut(c / 1.1)
+    _ctl.copy(Sd.from).lerp(_end, 0.5).addScaledVector(_cu, 0.3)
+    bez(Sd.from, _ctl, _end, u, beetle.position)
+    s = lerp(Sd.fromS, S2, u)
+  } else {
+    beetle.position.copy(_end)
+    s = S2
+  }
+  // bizga qaraydi, lekin ko'zi gulda
+  rose.localToWorld(_heart.set(0, 0.55, 0))
+  _fb.subVectors(camera.position, beetle.position).normalize()
+  _fa.subVectors(_heart, beetle.position).normalize()
+  frameQuat(_fb.addScaledVector(_fa, 0.3).normalize(), _cu, q)
+
+  const since = SHED.regrown && SHED.regrowStart != null ? t - SHED.regrowStart : -1
+  let tSad = 1,
+    tSm = 0
+  if (since >= 1.3) {
+    tSad = 0
+    tSm = 0.45 // kurtak ko'rindi — umid
+  }
+  if (since >= 3.3) tSm = 1 // gul ochilmoqda — quvonch
+  BF.sadF += (tSad - BF.sadF) * (1 - Math.exp(-dt * 4))
+  BF.smile += (tSm - BF.smile) * (1 - Math.exp(-dt * 6))
+  BF.angry += (0 - BF.angry) * (1 - Math.exp(-dt * 8))
+
+  if (!Sd.sighed && c > 1.0) {
+    Sd.sighed = true
+    duckMusic(0.35, 1700)
+    sfx.sigh()
+  }
+  if (Sd.sniffed < 2 && since < 0 && c > 2.7 + Sd.sniffed * 1.6) {
+    Sd.sniffed++
+    sfx.sniff()
+  }
+  if (!Sd.hoped && since >= 1.3) {
+    Sd.hoped = true
+    sfx.oh()
+  }
+  if (!Sd.joyed && since >= 3.3) {
+    Sd.joyed = true
+    duckMusic(0.35, 1300)
+    sfx.giggle()
+    spawnHearts(4)
+  }
+  if (since >= 4.7) {
+    BF.mode = 'return'
+    BF.sad = null
+  }
+  return s
+}
+
+function freeBeetle(t, dt) {
+  if (!BF.started) {
+    BF.started = true
+    BF.prev.copy(rest.pos)
+    enableInteraction()
+  }
+  camBasis()
+  const w = Math.abs(spin.omega)
+  // bosh aylanishi: tez ko'tariladi, sekin o'tadi
+  const dz = smooth(0.35, 3.2, w)
+  BF.dizzy += (dz - BF.dizzy) * (1 - Math.exp(-dt * (dz > BF.dizzy ? 2.2 : 0.55)))
+
+  let flying = true,
+    scale = 1
+  const q = _qf
+  switch (BF.mode) {
+    case 'rest':
+      beetle.position.copy(rest.pos)
+      q.copy(rest.q)
+      flying = false
+      if ((spin.accum > Math.PI * 2 && w > 1.2) || w > 6) takeOff()
+      break
+    case 'hover':
+      follow(hoverPoint(t, _tgt), dt, 2.6, 6)
+      faceFlight(dt, q)
+      BF.calm = w < 0.5 ? BF.calm + dt : 0
+      if (BF.calm > 0.8) BF.mode = 'return'
+      break
+    case 'return': {
+      follow(rest.pos, dt, 3.2, 3.2 + beetle.position.distanceTo(rest.pos))
+      faceFlight(dt, q)
+      const d = beetle.position.distanceTo(rest.pos)
+      if (d < 0.45) q.slerp(rest.q, smooth(0.45, 0.06, d))
+      if (d < 0.035) BF.mode = 'rest'
+      if (w > 6 || (spin.accum > Math.PI * 2 && w > 1.2)) takeOff()
+      break
+    }
+    case 'close':
+      scale = closeUpdate(t, dt, q)
+      break
+    case 'sad':
+      scale = sadUpdate(t, dt, q)
+      break
+  }
+  const staged = BF.mode === 'close' || BF.mode === 'sad'
+  if (staged) BF.sc = scale
+  else {
+    // uzoqlashganda asta kichrayadi
+    BF.sc += (1 - BF.sc) * (1 - Math.exp(-dt * 2.2))
+    scale = BF.sc
+  }
+  if (BF.mode !== 'close') BF.closeness = clamp01((scale - 1) / 3)
+  if (!staged) {
+    BF.smile += (0 - BF.smile) * (1 - Math.exp(-dt * 6))
+    BF.angry += (0 - BF.angry) * (1 - Math.exp(-dt * 6))
+    BF.sadF += (0 - BF.sadF) * (1 - Math.exp(-dt * 6))
+  }
+  beetle.quaternion.slerp(q, 1 - Math.exp(-dt * (BF.mode === 'rest' ? 14 : 7)))
+  BF.prev.copy(beetle.position)
+  beetle.scale.setScalar(scale)
+
+  // qanotlar
+  BF.fly += ((flying ? 1 : 0) - BF.fly) * (1 - Math.exp(-dt * 6))
+  const fly = BF.fly
+  elytra.forEach(({ piv, s }) => (piv.rotation.z = s * 0.85 * fly))
+  const flap = Math.sin(t * 38)
+  wings.forEach(({ piv, s }) => {
+    piv.visible = fly > 0.03
+    piv.rotation.z = s * (0.15 + 0.55 * flap) * fly
+  })
+  // yaqin planda tebranish kichrayadi (aks holda kattalashtirilgan yuz sakrab ketadi)
+  rig.position.y =
+    (fly > 0.5 ? 0.02 * Math.sin(t * 9) : 0.006 * Math.sin(t * 2.2)) * (1 - 0.92 * BF.closeness)
+
+  // bosh: aylanish, kulgi, jahl
+  const dzz = staged ? 0 : BF.dizzy
+  const sm = BF.smile,
+    an = BF.angry,
+    sd = BF.sadF
+  headG.rotation.z = dzz * 0.55 * Math.sin(t * 6.2) + sd * 0.07 * Math.sin(t * 1.4)
+  headG.rotation.x =
+    dzz * 0.22 * Math.cos(t * 6.2) + sm * 0.08 * Math.abs(Math.sin(t * 15)) + sd * 0.24 // xafa: boshi egik
+  headG.rotation.y = dzz * 0.3 * Math.sin(t * 3.1) + an * 0.2 * Math.sin(t * 15)
+  rig.rotation.z = dzz * 0.28 * Math.sin(t * 6.2 + 1) // butun tanasi gandiraklaydi
+  rig.rotation.x = dzz * 0.12 * Math.cos(t * 6.2 + 1)
+  antennae.forEach(({ piv, s }, i) => {
+    piv.rotation.z =
+      s * (0.12 + 0.35 * an) * Math.sin(t * (2.4 + 6 * dzz + 8 * sm) + i * 1.3) + s * 0.25 * an - s * 0.75 * sd
+    piv.rotation.x = 0.1 * Math.sin(t * 1.9 + i) - 0.3 * an + 0.35 * sd // xafa: mo'ylovlari osilgan
+  })
+  dizzyStars.forEach((sp, i) => {
+    sp.visible = dzz > 0.06
+    const a = t * 5 + i * 2.094
+    sp.position.set(0.1 * Math.cos(a), 0.13 + 0.015 * Math.sin(t * 7 + i), 0.04 + 0.1 * Math.sin(a))
+    sp.material.opacity = smooth(0.06, 0.4, dzz)
+  })
+
+  // ko'z pirpiratish
+  BF.nextBlink -= dt
+  if (BF.nextBlink < 0) {
+    BF.blink = 1
+    BF.nextBlink = 2 + Math.random() * 3
+  }
+  const blinkK = BF.blink > 0 ? Math.sin((1 - BF.blink) * Math.PI) : 0
+  BF.blink = Math.max(0, BF.blink - dt * 7)
+  setFace(sm, an, blinkK, t, sd)
+
+  // nur: yaqin kelganda ekranni "kuydirmasin"
+  const cl = BF.closeness
+  legs.forEach((l) => (l.visible = cl < 0.2)) // yaqin planda oyoqlar yuz ortidan chiqib turmasin
+  stage.classList.toggle('closeup', cl > 0.25) // yaqin planda pastdagi yozuv yuzni to'smasin
+  const pulse = 0.88 + 0.12 * Math.sin(t * 2.8)
+  halo.scale.setScalar((0.95 + 0.25 * fly) * pulse * (1 - 0.9 * cl))
+  halo.material.opacity = 1 - cl
+  beetleLight.intensity = 1.7 * (0.55 + 0.45 * fly) * pulse * (1 - 0.8 * cl)
+  shellMat.emissiveIntensity = 0.8 * (1 - 0.6 * cl) + an * 0.35
+  sfx.setBuzz(BF.mode === 'close' ? cl * (1 - 0.6 * Math.max(sm, an)) : 0)
+  updateHearts(dt)
 }
 
 /* =====================================================================
@@ -1865,6 +2937,12 @@ function renderFrame(t) {
    VAQT BO'YICHA YANGILASH (t = tugma bosilgandan beri soniya)
    ===================================================================== */
 function update(t, dt) {
+  if (pendingShake) {
+    pendingShake = false
+    startShed(t)
+  }
+  const hc = headClock(t) // silkitilgandan keyin gul boshi qaytadan o'sadi
+
   // ---- poya o'sishi (pastdan yuqoriga) ----
   const sp = easeOut(clamp01((t - T.stemStart) / T.stemDur))
   plant.visible = sp > 0.001
@@ -1885,16 +2963,20 @@ function update(t, dt) {
   })
 
   // ---- kosacha va kurtak ----
-  const hs = easeOut(clamp01((t - T.headStart) / T.headDur))
+  const hs = easeOut(clamp01((hc - T.headStart) / T.headDur))
   head.visible = hs > 0.001
   hip.scale.setScalar(Math.max(hs, 0.001))
-  const b1 = clamp01((t - T.budStart) / T.budDur)
-  const op = clamp01((t - T.openStart) / T.openDur)
+  const b1 = clamp01((hc - T.budStart) / T.budDur)
+  const op = clamp01((hc - T.openStart) / T.openDur)
 
   const bud = easeOut(b1) * 0.7
   rose.scale.setScalar(
-    CONFIG.roseScale *
-      (b1 < 1 ? Math.max(bud, 0.0001) : 0.7 + 0.3 * easeInOut(op))
+    Math.max(
+      0.0001,
+      CONFIG.roseScale *
+        (b1 < 1 ? Math.max(bud, 0.0001) : 0.7 + 0.3 * easeInOut(op)) *
+        shedShrink(t)
+    )
   )
   petals.forEach((p) => {
     p.azG.visible = b1 > 0.001
@@ -1912,12 +2994,13 @@ function update(t, dt) {
     s.pivot.scale.setScalar(Math.max(hs, 0.001))
   })
 
-  heartLight.intensity = 1.4 * smooth(5.0, 7.5, t)
+  heartLight.intensity = 1.4 * smooth(5.0, 7.5, hc)
 
   // ---- sekin tebranish (shamolda) ----
   const idle = smooth(2.5, 7, t)
   plant.rotation.y = 0.36 * Math.sin(t * 0.33) * idle
   plant.rotation.z = 0.02 * Math.sin(t * 0.8) * idle
+  updateSpin(t, dt)
 
   // ---- yulduzchalar ----
   if (sparkMat) {
@@ -1931,6 +3014,10 @@ function update(t, dt) {
 
   // ---- qo'ng'izcha ----
   updateBeetle(t, dt)
+
+  // ---- aylanish yulduzchalari, to'kilgan gulbarglar ----
+  updateSpinSparks(t, dt)
+  updateShed(t, dt)
 
   // ---- tushuvchi gulbarglar ----
   if (dt > 0 && t > T.fallStart) {
@@ -1980,6 +3067,8 @@ function begin() {
   card.classList.add('hide')
   stage.classList.add('grow') // CSS: nur va matn animatsiyalari
   startMusic()
+  sfx.initSfx()
+  enableMotion() // iOS: silkitishni sezish uchun ruxsat (tugma bosilganda so'raladi)
   muteBtn.classList.add('show')
   startMs = performance.now()
   lastMs = startMs
@@ -1993,6 +3082,7 @@ let isMuted = false
 muteBtn.addEventListener('click', () => {
   isMuted = !isMuted
   setMuted(isMuted)
+  sfx.setSfxMuted(isMuted)
   muteBtn.textContent = isMuted ? '🔇' : '🔊'
 })
 
@@ -2009,4 +3099,19 @@ if (freeze !== null) {
   window.__frozen = true
   }
   Promise.resolve(document.fonts ? document.fonts.load('170px "Great Vibes"') : 0).catch(() => {}).then(() => { textData = null; go() })
+}
+
+// Sozlash uchun: ?debug — konsolda window.__rose.shake() bilan silkitishni sinash mumkin
+if (new URLSearchParams(location.search).has('debug')) {
+  window.__rose = {
+    shake: requestShake,
+    spin,
+    BF,
+    SHED,
+    petals,
+    beetle,
+    headG,
+    camera,
+    ff: (sec) => startMs !== null && (startMs -= sec * 1000), // vaqtni oldinga surish
+  }
 }
