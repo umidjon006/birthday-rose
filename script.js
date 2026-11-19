@@ -5,8 +5,8 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
-import { startMusic, setMuted, restartMusic, duckMusic } from './music.js'
-import * as sfx from './sfx.js'
+import { startMusic, setMuted, restartMusic, duckMusic } from './music.js?v=3'
+import * as sfx from './sfx.js?v=3'
 
 /* =====================================================================
    SOZLAMALAR (shu yerdan sozlang)
