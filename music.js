@@ -1,10 +1,12 @@
 /* =====================================================================
-   MUSIQA: brauzerning o'zida yaratiladi (fayl kerak emas)
-   - musiqa qutisi ovozida "Happy Birthday" (jamoat mulki, erkin kuy)
-   - ostida yumshoq akkordlar, orasida mayin arpedjio
-   O'z mp3 faylingizni qo'ymoqchi bo'lsangiz: MUSIC_FILE = 'music.mp3'
+   MUSIQA
+   - MUSIC_FILE bo'lsa: shu mp3 chalinadi, MUSIC_START_AT soniyasidan boshlab,
+     tugasa yana o'sha joydan qaytadi — sahifa yopilmaguncha to'xtamaydi.
+   - MUSIC_FILE bo'sh bo'lsa: brauzerning o'zida "Happy Birthday" yaratiladi.
    ===================================================================== */
-export const MUSIC_FILE = '' // masalan: 'music.mp3' (shu papkaga qo'ying)
+export const MUSIC_FILE = 'song.mp3' // "A Thousand Years" — Christina Perri
+export const MUSIC_START_AT = 20 // qo'shiq 20-soniyadan boshlanadi
+const MUSIC_VOLUME = 0.8
 
 const BEAT = 0.66 // bir zarb davomiyligi (soniya) — sekin, romantik
 const MELODY_AT = 9.0 // kuy qo'ng'izcha chiqqanda boshlanadi (tugma bosilgandan keyin)
@@ -158,15 +160,42 @@ function scheduler() {
 // tugma bosilganda chaqiriladi (brauzer ovozni faqat foydalanuvchi bosgandan keyin ruxsat beradi)
 export function startMusic() {
   if (MUSIC_FILE) {
+    if (fileAudio) return
     fileAudio = new Audio(MUSIC_FILE)
-    fileAudio.loop = true
+    fileAudio.preload = 'auto'
+    fileAudio.loop = false // o'zimiz qaytaramiz: har safar 20-soniyadan
     fileAudio.volume = 0
-    fileAudio.play().catch(() => {})
+
+    const seekToStart = () => {
+      try {
+        fileAudio.currentTime = MUSIC_START_AT
+      } catch (e) {}
+    }
+    // metadata yuklangach 20-soniyaga o'tamiz
+    if (fileAudio.readyState >= 1) seekToStart()
+    else fileAudio.addEventListener('loadedmetadata', seekToStart, { once: true })
+
+    // qo'shiq tugasa yana 20-soniyadan boshlanadi — sahifa yopilmaguncha to'xtamaydi
+    fileAudio.addEventListener('ended', () => {
+      seekToStart()
+      fileAudio.play().catch(() => {})
+    })
+
+    const play = () => fileAudio.play().catch(() => {})
+    play()
+    // brauzer sekin yuklasa, tayyor bo'lgach yana urinib ko'ramiz
+    fileAudio.addEventListener('canplay', () => {
+      if (fileAudio.paused) {
+        if (fileAudio.currentTime < MUSIC_START_AT) seekToStart()
+        play()
+      }
+    })
+
     let v = 0
     const fade = setInterval(() => {
-      v = Math.min(0.8, v + 0.04)
+      v = Math.min(MUSIC_VOLUME, v + 0.04)
       fileAudio.volume = muted ? 0 : v
-      if (v >= 0.8) clearInterval(fade)
+      if (v >= MUSIC_VOLUME) clearInterval(fade)
     }, 120)
     return
   }
@@ -192,7 +221,7 @@ export function startMusic() {
 
 export function setMuted(m) {
   muted = m
-  if (fileAudio) fileAudio.volume = m ? 0 : 0.8
+  if (fileAudio) fileAudio.volume = m ? 0 : MUSIC_VOLUME
   if (ctx && master) {
     master.gain.cancelScheduledValues(ctx.currentTime)
     master.gain.linearRampToValueAtTime(m ? 0 : 0.9, ctx.currentTime + 0.4)
